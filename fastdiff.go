@@ -13,11 +13,15 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"os/signal"
 )
 
 type NameAndSize struct {
-	name string
-	size int64
+	name 	string
+	size 	int64
+	checked int64
+	differs bool
+	failed  bool
 }
 
 type Stats struct {
@@ -26,13 +30,10 @@ type Stats struct {
 	aMissing int64
 	bMissing int64
 
-	totalSize             int64
 	unreadable            int64
 	notEqual              int64
-	completeCheck         int64
-	partiallyCheckedCount int64
-	partiallyCheckedBytes int64
-	partiallyCheckedSize  int64
+	completeCheck         int
+	wasCancelled	bool
 }
 
 const VERSION = "0.9.0"
@@ -55,8 +56,6 @@ type Logger struct {
 var logger Logger
 
 func (l *Logger) progress(format string, args ...interface{}) {
-	time.Sleep(100 * time.Millisecond)
-
 	l.mutex.Lock()
 	l.nextProgressFormat = format
 	l.nextProgressArgs = args
@@ -115,8 +114,10 @@ func (l *Logger) error(text string) {
 // Write output to stdout. This method should be used for "real" output, not informative messages: the kind of stuff
 // a user might want to pipe to a file if they want just a list of differences.
 func (l *Logger) writeOut(text string) {
-	l.resetIfNeeded()
-	os.Stdout.WriteString(text + "\n")
+	// FIXME The reset clears the stderr line but then we write to the stdout one, so don't use this.
+	// l.resetIfNeeded()
+	// TODO Don't write control codes to stdout if it's not a tty.
+	os.Stdout.WriteString("\r\033[K" + text + "\n")
 }
 
 // Write an informative message to stderr. The message will be suppressed in quiet mode.
@@ -201,7 +202,7 @@ func (lr *ListReader) advance() {
 	logger.progress("%10d: %v", lr.stats.aCount+lr.stats.aMissing, path.Join(lr.results.folder, lr.info.Name()))
 }
 
-func comparePaths(aRoot string, bRoot string) {
+func comparePaths(aRoot string, bRoot string, skipFull bool) {
 	var needDataCompare []NameAndSize
 	var stats Stats
 	var folderWorkOverflow []string
@@ -309,7 +310,7 @@ func comparePaths(aRoot string, bRoot string) {
 
 			default:
 				// This name requires a byte by byte comparison.
-				needDataCompare = append(needDataCompare, NameAndSize{path.Join(lA.results.folder, lA.info.Name()), lA.info.Size()})
+				needDataCompare = append(needDataCompare, NameAndSize{name: path.Join(lA.results.folder, lA.info.Name()), size: lA.info.Size()})
 			}
 
 			lA.advance()
@@ -319,16 +320,37 @@ func comparePaths(aRoot string, bRoot string) {
 	close(listWorkA)
 	close(listWorkB)
 
-	compareData(&logger, &stats, aRoot, bRoot, needDataCompare)
+	compareData(&logger, &stats, aRoot, bRoot, needDataCompare, skipFull)
 
 	logger.log(strings.Repeat("-", 80))
+	if stats.wasCancelled {
+		logger.log("Interrupted before completion.")
+	}
+
 	checkedPercentage := 1.0
 	if stats.completeCheck > 0 {
 		logger.log(fmt.Sprintf("%d file pair(s) fully equal.", stats.completeCheck))
 	}
-	if stats.partiallyCheckedSize > 0 {
-		checkedPercentage = float64(stats.partiallyCheckedBytes) / float64(stats.partiallyCheckedSize)
-		logger.log(fmt.Sprintf("%d file pair(s) at least partially equal. %d/%d bytes (%.2f%%) checked.", stats.partiallyCheckedCount, stats.partiallyCheckedBytes, stats.partiallyCheckedSize, checkedPercentage))
+
+	partiallyChecked := len(needDataCompare) - stats.completeCheck
+	if partiallyChecked > 0 {
+		// Not all files which were compared were fully compared.
+		var totalBytesChecked int64 = 0
+		var totalBytesToCheck int64 = 0
+		for i := 0; i < len(needDataCompare); i++ {
+			if needDataCompare[i].differs || needDataCompare[i].failed {
+				continue
+			}
+			totalBytesChecked += needDataCompare[i].checked
+			totalBytesToCheck += needDataCompare[i].size
+
+			if !stats.wasCancelled && !skipFull && needDataCompare[i].checked != needDataCompare[i].size {
+				panic(fmt.Sprintf("Failed to full check %s: %d/%d bytes checked.", needDataCompare[i].name, needDataCompare[i].checked, needDataCompare[i].size))
+			}
+		}
+
+		checkedPercentage = float64(totalBytesChecked) / float64(totalBytesToCheck)
+		logger.log(fmt.Sprintf("%d file pair(s) at least %.2f%% equal (%d/%d bytes checked).", partiallyChecked, 100 * checkedPercentage, totalBytesChecked, totalBytesToCheck))
 	}
 	if stats.unreadable > 0 {
 		logger.log(fmt.Sprintf("%d file pair(s) could not be compared.", stats.unreadable))
@@ -394,7 +416,7 @@ func (c *CancellationIndex) isCancelled(index int) bool {
 	return c.cancellations[index]
 }
 
-func readWorker(bytesRead chan ReadBlockResult, root_path string, work []NameAndSize, cancellations *CancellationIndex) {
+func readWorker(bytesRead chan ReadBlockResult, root_path string, work []NameAndSize, cancellations *CancellationIndex, full bool) {
 	defer close(bytesRead)
 
 	for i := 0; i < len(work); i++ {
@@ -403,7 +425,6 @@ func readWorker(bytesRead chan ReadBlockResult, root_path string, work []NameAnd
 		}
 
 		if work[i].size == 0 {
-			bytesRead <- ReadBlockResult{index: i, block: make([]byte, 0)}
 			continue
 		}
 
@@ -419,31 +440,48 @@ func readWorker(bytesRead chan ReadBlockResult, root_path string, work []NameAnd
 			continue
 		}
 
-		// Get the first block.
-		firstLength := minInt64(BLOCK_SIZE, work[i].size)
-		if !mustRead(bytesRead, i, full_path, f, 0, firstLength) {
-			cancellations.cancel(i)
-			f.Close()
-			continue
-		}
+		if !full {
+			// Get the first block.
+			firstLength := minInt64(BLOCK_SIZE, work[i].size)
+			if !mustRead(bytesRead, i, full_path, f, 0, firstLength) {
+				cancellations.cancel(i)
+				f.Close()
+				continue
+			}
 
-		// If that was the whole file we're done with this index.
-		if firstLength == work[i].size {
-			f.Close()
-			continue
-		}
+			// If that was the whole file we're done with this index.
+			if firstLength == work[i].size {
+				f.Close()
+				continue
+			}
 
-		// Don't read the second block if the work was cancelled.
-		if cancellations.isCancelled(i) {
-			f.Close()
-			continue
-		}
+			// Don't read the second block if the work was cancelled.
+			if cancellations.isCancelled(i) {
+				f.Close()
+				continue
+			}
 
-		lastLength := minInt64(work[i].size-firstLength, BLOCK_SIZE)
-		if !mustRead(bytesRead, i, full_path, f, work[i].size-lastLength, lastLength) {
-			cancellations.cancel(i)
-			f.Close()
-			continue
+			lastLength := minInt64(work[i].size-firstLength, BLOCK_SIZE)
+			if !mustRead(bytesRead, i, full_path, f, work[i].size-lastLength, lastLength) {
+				cancellations.cancel(i)
+				f.Close()
+				continue
+			}
+		} else {
+			// Read all the blocks except for the first and the last.
+			if work[i].size <= 2 * BLOCK_SIZE {
+				// We already compared all of the blocks.
+				continue
+			}
+
+			// fmt.Printf("\nReading %d: %s of %d bytes", i, work[i].name, work[i].size)
+			for offset := BLOCK_SIZE; offset < work[i].size-BLOCK_SIZE; offset += BLOCK_SIZE {
+				readTo := minInt64(offset + BLOCK_SIZE, work[i].size - BLOCK_SIZE)
+				if !mustRead(bytesRead, i, full_path, f, offset, readTo - offset) {
+					cancellations.cancel(i)
+					break
+				}
+			}
 		}
 
 		f.Close()
@@ -451,40 +489,96 @@ func readWorker(bytesRead chan ReadBlockResult, root_path string, work []NameAnd
 
 }
 
-func compareData(logger *Logger, stats *Stats, aRoot string, bRoot string, needDataCompare []NameAndSize) {
-	logger.log("### Comparing files...")
+// (Slow) method to find the first differing bytes in the given array.
+func indexOfDifference(blockA []byte, blockB []byte) int {
+	l := min(len(blockA), len(blockB))
+
+	for i := 0; i < l; i++ {
+		if blockA[i] != blockB[i] {
+			return i
+		}
+	}
+
+	return -1
+}
+
+func compareData(logger *Logger, stats *Stats, aRoot string, bRoot string, needDataCompare []NameAndSize, skipFull bool) {
+	cancelChannel := make(chan os.Signal, 1)
+	signal.Notify(cancelChannel, os.Interrupt)
+	go func(){
+		<- cancelChannel
+		stats.wasCancelled = true
+	}()
 
 	cancellations := CancellationIndex{cancellations: make(map[int]bool)}
 
-	aResults, bResults := make(chan ReadBlockResult, DATA_DIFF_PIPELINE_DEPTH), make(chan ReadBlockResult, DATA_DIFF_PIPELINE_DEPTH)
-	go readWorker(aResults, aRoot, needDataCompare, &cancellations)
-	go readWorker(bResults, bRoot, needDataCompare, &cancellations)
+	// It's possible to cancel this part too but we only advertise it for the last stage.
+	logger.log("### Quick comparing files...")
 
+	aResults, bResults := make(chan ReadBlockResult, DATA_DIFF_PIPELINE_DEPTH), make(chan ReadBlockResult, DATA_DIFF_PIPELINE_DEPTH)
+	go readWorker(aResults, aRoot, needDataCompare, &cancellations, false)
+	go readWorker(bResults, bRoot, needDataCompare, &cancellations, false)
+	stageCompareData(logger, stats, aRoot, bRoot, needDataCompare, &cancellations, aResults, bResults)
+
+	if skipFull || stats.wasCancelled {
+		return
+	}
+
+	logger.log("### Fully comparing files (Ctrl-C to cancel)...")
+
+	aResultsFull, bResultsFull := make(chan ReadBlockResult, DATA_DIFF_PIPELINE_DEPTH), make(chan ReadBlockResult, DATA_DIFF_PIPELINE_DEPTH)
+	go readWorker(aResultsFull, aRoot, needDataCompare, &cancellations, true)
+	go readWorker(bResultsFull, bRoot, needDataCompare, &cancellations, true)
+	stageCompareData(logger, stats, aRoot, bRoot, needDataCompare, &cancellations, aResultsFull, bResultsFull,)
+}
+
+func stageCompareData(logger *Logger, stats *Stats, aRoot string, bRoot string, needDataCompare []NameAndSize, cancellations *CancellationIndex, aResults chan ReadBlockResult, bResults chan ReadBlockResult) {
 	var aResult, bResult ReadBlockResult
-	var aOk, bOk bool
+	var aOk, bOk bool = true, true
 	aResult.index = -1
 	bResult.index = -1
+
+	needDataCompareLoop:
 	for i := 0; i < len(needDataCompare); i++ {
-		var checked int64
-		failed := false
+		if stats.wasCancelled {
+			return
+		}
+		if needDataCompare[i].failed {
+			continue
+		}
+
 		for {
-			for ; aResult.index < i; aResult = <-aResults {
+			for ; aResult.index < i && aOk; aResult, aOk = <-aResults {
 			}
 
-			if aResult.err != nil {
-				failed = true
+			if i == aResult.index && aResult.err != nil {
+				if !needDataCompare[i].failed {
+					needDataCompare[i].failed = true
+					stats.unreadable++
+				}
 				break
 			}
 
-			for ; bResult.index < i; bResult = <-bResults {
+			for ; bResult.index < i && bOk; bResult, bOk = <-bResults {
 			}
 
-			if bResult.err != nil {
-				failed = true
+			if i == bResult.index && bResult.err != nil {
+				if !needDataCompare[i].failed {
+					needDataCompare[i].failed = true
+					stats.unreadable++
+				}
 				break
 			}
 
-			// fmt.Printf("\nprocessing block from %v", i)
+			if !aOk || aResult.index > i {
+				continue needDataCompareLoop
+			}
+
+			if !bOk || bResult.index > i {
+				continue needDataCompareLoop
+			}
+
+			// fmt.Printf("\nprocessing block from %v\n", i)
 
 			if !bytes.Equal(aResult.block, bResult.block) {
 				// Just in case any of the workers has not yet gone to the next block, try to save that
@@ -492,38 +586,34 @@ func compareData(logger *Logger, stats *Stats, aRoot string, bRoot string, needD
 				// blocks.
 				cancellations.cancel(i)
 
-				// TODO offset + location of diff == byte position of difference
-				if aResult.offset == 0 {
-					logger.writeOut(fmt.Sprintf("%v and counterpart differ on first block.", path.Join(aRoot, needDataCompare[i].name)))
-				} else {
-					logger.writeOut(fmt.Sprintf("%v and counterpart differ on last block.", path.Join(aRoot, needDataCompare[i].name)))
-				}
+				needDataCompare[i].differs = true
+
+				logger.writeOut(fmt.Sprintf("%v and counterpart differ on byte %d.", path.Join(aRoot, needDataCompare[i].name), aResult.offset + int64(indexOfDifference(aResult.block, bResult.block))))
 				stats.notEqual++
 				break
 			}
 
-			checked += int64(len(aResult.block))
+			needDataCompare[i].checked += int64(len(aResult.block))
+
+			if needDataCompare[i].checked > needDataCompare[i].size {
+				panic(fmt.Sprintf("%d: Compared more data (%d) than there are bytes in %s (%d)!", i, needDataCompare[i].checked, needDataCompare[i].name, needDataCompare[i].size))
+			}
+
+			if needDataCompare[i].checked == needDataCompare[i].size {
+				stats.completeCheck++
+			}
+
+			var fileProgress float64
+			if needDataCompare[i].size == 0 {
+				fileProgress = 1
+			} else {
+				fileProgress = float64(needDataCompare[i].checked) / float64(needDataCompare[i].size)
+			}
+			logger.progress("%10d/%10d: (%.2f%%) %v", i, len(needDataCompare), 100 * fileProgress, needDataCompare[i].name)
+
 			aResult, aOk = <-aResults
 			bResult, bOk = <-bResults
-
-			// Out of blocks to compare in this index?
-			if !aOk || !bOk || aResult.index > i || bResult.index > i {
-				break
-			}
 		}
-
-		if failed {
-			stats.unreadable++
-		} else if checked == needDataCompare[i].size {
-			stats.completeCheck++
-		} else {
-			stats.partiallyCheckedCount++
-			stats.partiallyCheckedBytes += checked
-			stats.partiallyCheckedSize += needDataCompare[i].size
-		}
-
-		stats.totalSize += needDataCompare[i].size
-		logger.progress("%10d/%10d: %v", i, len(needDataCompare), needDataCompare[i].name)
 	}
 }
 
@@ -531,15 +621,16 @@ func main() {
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, `
 Usage: %s [OPTION]... FILE FILE
-Recursively compare the paths given by FILEs and try to quickly find differences between the two. The focus is on finding obvious differences fast rather than doing a full byte by byte comparison.
+Recursively compare the paths given by FILEs and try to quickly find differences between the two. Fastdiff reports obvious differences quickly, and only after that goes into a full byte by byte comparison.
 
 `,
 			os.Args[0])
 		flag.PrintDefaults()
 	}
 
-	var quiet = flag.BoolP("quiet", "q", false, "suppress progress and final summary message; only print differences found")
+	var skipFull = flag.Bool("skip-full", false, fmt.Sprintf("only compare the first and last %d bytes of each file; stop immediately after the quick compare stage", BLOCK_SIZE))
 	var printVersion = flag.Bool("version", false, "output version information and exit")
+	var quiet = flag.BoolP("quiet", "q", false, "suppress progress and final summary message; only print differences found")
 
 	flag.Parse()
 
@@ -567,6 +658,6 @@ Recursively compare the paths given by FILEs and try to quickly find differences
 	quitLogger := make(chan int)
 	logger = Logger{quiet: *quiet}
 	go logger.run(quitLogger)
-	comparePaths(aRoot, bRoot)
+	comparePaths(aRoot, bRoot, *skipFull)
 	close(quitLogger)
 }
