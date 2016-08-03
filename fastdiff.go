@@ -35,6 +35,8 @@ type Stats struct {
 	partiallyCheckedSize  int64
 }
 
+const VERSION = "0.9.0"
+
 const BLOCK_SIZE int64 = 4096
 const FOLDER_LISTING_PIPELINE_DEPTH = 16
 const FOLDER_ENTRY_READ_AHEAD = 64
@@ -536,9 +538,15 @@ Recursively compare the paths given by FILEs and try to quickly find differences
 		flag.PrintDefaults()
 	}
 
-	var quiet = flag.BoolP("quiet", "q", false, "Suppress progress and final summary message; only print differences found")
+	var quiet = flag.BoolP("quiet", "q", false, "suppress progress and final summary message; only print differences found")
+	var printVersion = flag.Bool("version", false, "output version information and exit")
 
 	flag.Parse()
+
+	if *printVersion {
+		fmt.Printf("fastdiff version %s\n", VERSION)
+		os.Exit(0)
+	}
 
 	if len(flag.Args()) != 2 {
 		flag.Usage()
