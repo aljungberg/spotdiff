@@ -130,6 +130,10 @@ func (l *Logger) log(text string) {
 	os.Stderr.WriteString(text + "\n")
 }
 
+func headlinePad(text string, l int) string {
+	return "- " + text + " " + strings.Repeat("-", max(0, l - len(text) - 4))
+}
+
 func listInto(results chan os.FileInfo, rootPath string, relPath string) {
 	defer close(results)
 
@@ -161,6 +165,13 @@ func listWorker(results chan ListResult, rootPath string, folders chan string) {
 		results <- ListResult{folder, result}
 		listInto(result, rootPath, folder)
 	}
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func minInt64(a, b int64) int64 {
@@ -247,7 +258,7 @@ func comparePaths(aRoot string, bRoot string, skipFull bool) {
 	lA := ListReader{stats: &stats, resultCounter: &stats.aCount}
 	lB := ListReader{stats: &stats, resultCounter: &stats.bCount}
 
-	logger.log("### Finding files...")
+	logger.log(headlinePad("Finding files", 80))
 	for waitingForFolders > 0 {
 		lA.results = <-listResultsA
 		lB.results = <-listResultsB
@@ -322,7 +333,7 @@ func comparePaths(aRoot string, bRoot string, skipFull bool) {
 
 	compareData(&logger, &stats, aRoot, bRoot, needDataCompare, skipFull)
 
-	logger.log(strings.Repeat("-", 80))
+	logger.log(headlinePad("Result", 80))
 	if stats.wasCancelled {
 		logger.log("Interrupted before completion.")
 	}
@@ -513,7 +524,7 @@ func compareData(logger *Logger, stats *Stats, aRoot string, bRoot string, needD
 	cancellations := CancellationIndex{cancellations: make(map[int]bool)}
 
 	// It's possible to cancel this part too but we only advertise it for the last stage.
-	logger.log("### Quick comparing files...")
+	logger.log(headlinePad("Quick comparing files", 80))
 
 	aResults, bResults := make(chan ReadBlockResult, DATA_DIFF_PIPELINE_DEPTH), make(chan ReadBlockResult, DATA_DIFF_PIPELINE_DEPTH)
 	go readWorker(aResults, aRoot, needDataCompare, &cancellations, false)
@@ -524,7 +535,7 @@ func compareData(logger *Logger, stats *Stats, aRoot string, bRoot string, needD
 		return
 	}
 
-	logger.log("### Fully comparing files (Ctrl-C to cancel)...")
+	logger.log(headlinePad("Fully comparing files (Ctrl-C to cancel)", 80))
 
 	aResultsFull, bResultsFull := make(chan ReadBlockResult, DATA_DIFF_PIPELINE_DEPTH), make(chan ReadBlockResult, DATA_DIFF_PIPELINE_DEPTH)
 	go readWorker(aResultsFull, aRoot, needDataCompare, &cancellations, true)
