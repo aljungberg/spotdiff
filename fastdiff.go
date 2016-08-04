@@ -38,7 +38,7 @@ type Stats struct {
 
 const VERSION = "0.9.0"
 
-const BLOCK_SIZE int64 = 4096
+const BLOCK_SIZE int64 = 4 * 1024
 const FOLDER_LISTING_PIPELINE_DEPTH = 16
 const FOLDER_ENTRY_READ_AHEAD = 64
 const DATA_DIFF_PIPELINE_DEPTH = 128
@@ -384,13 +384,15 @@ type ReadBlockResult struct {
 	err    error
 }
 
-func mustRead(bytesRead chan ReadBlockResult, index int, full_path string, f io.ReadSeeker, offset int64, size int64) bool {
+func mustRead(bytesRead chan ReadBlockResult, index int, full_path string, f io.ReadSeeker, offset int64, lastOffset *int64, size int64) bool {
 	// fmt.Printf("\nmustRead %v:%v", index, offset)
-	_, err := f.Seek(offset, 0)
-	if err != nil {
-		logger.error(fmt.Sprintf("Unable to read %v (%v).", full_path, err))
-		bytesRead <- ReadBlockResult{index: index, err: err}
-		return false
+	if offset != *lastOffset {
+		_, err := f.Seek(offset, 0)
+		if err != nil {
+			logger.error(fmt.Sprintf("Unable to read %v (%v).", full_path, err))
+			bytesRead <- ReadBlockResult{index: index, err: err}
+			return false
+		}
 	}
 
 	buf := make([]byte, size)
@@ -406,6 +408,7 @@ func mustRead(bytesRead chan ReadBlockResult, index int, full_path string, f io.
 		return false
 	}
 
+	*lastOffset = offset + size
 	bytesRead <- ReadBlockResult{index: index, offset: offset, block: buf[:]}
 	return true
 }
@@ -451,10 +454,12 @@ func readWorker(bytesRead chan ReadBlockResult, root_path string, work []NameAnd
 			continue
 		}
 
+		var lastOffset int64 = 0
+
 		if !full {
 			// Get the first block.
 			firstLength := minInt64(BLOCK_SIZE, work[i].size)
-			if !mustRead(bytesRead, i, full_path, f, 0, firstLength) {
+			if !mustRead(bytesRead, i, full_path, f, 0, &lastOffset, firstLength) {
 				cancellations.cancel(i)
 				f.Close()
 				continue
@@ -473,9 +478,8 @@ func readWorker(bytesRead chan ReadBlockResult, root_path string, work []NameAnd
 			}
 
 			lastLength := minInt64(work[i].size-firstLength, BLOCK_SIZE)
-			if !mustRead(bytesRead, i, full_path, f, work[i].size-lastLength, lastLength) {
+			if !mustRead(bytesRead, i, full_path, f, work[i].size-lastLength, &lastOffset, lastLength) {
 				cancellations.cancel(i)
-				f.Close()
 				continue
 			}
 		} else {
@@ -488,7 +492,7 @@ func readWorker(bytesRead chan ReadBlockResult, root_path string, work []NameAnd
 			// fmt.Printf("\nReading %d: %s of %d bytes", i, work[i].name, work[i].size)
 			for offset := BLOCK_SIZE; offset < work[i].size-BLOCK_SIZE; offset += BLOCK_SIZE {
 				readTo := minInt64(offset + BLOCK_SIZE, work[i].size - BLOCK_SIZE)
-				if !mustRead(bytesRead, i, full_path, f, offset, readTo - offset) {
+				if !mustRead(bytesRead, i, full_path, f, offset, &lastOffset, readTo - offset) {
 					cancellations.cancel(i)
 					break
 				}
