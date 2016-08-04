@@ -38,7 +38,7 @@ type Stats struct {
 
 const VERSION = "0.9.0"
 
-const BLOCK_SIZE int64 = 4 * 1024
+const BLOCK_SIZE int64 = 16 * 1024
 const FOLDER_LISTING_PIPELINE_DEPTH = 16
 const FOLDER_ENTRY_READ_AHEAD = 64
 const DATA_DIFF_PIPELINE_DEPTH = 128
