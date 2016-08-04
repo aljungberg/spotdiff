@@ -9,16 +9,16 @@ import (
 	"io"
 	"io/ioutil"
 	"os"
+	"os/signal"
 	"path"
 	"strings"
 	"sync"
 	"time"
-	"os/signal"
 )
 
 type NameAndSize struct {
-	name 	string
-	size 	int64
+	name    string
+	size    int64
 	checked int64
 	differs bool
 	failed  bool
@@ -30,10 +30,10 @@ type Stats struct {
 	aMissing int64
 	bMissing int64
 
-	unreadable            int64
-	notEqual              int64
-	completeCheck         int
-	wasCancelled	bool
+	unreadable    int64
+	notEqual      int64
+	completeCheck int
+	wasCancelled  bool
 }
 
 const VERSION = "0.9.0"
@@ -131,7 +131,7 @@ func (l *Logger) log(text string) {
 }
 
 func headlinePad(text string, l int) string {
-	return "- " + text + " " + strings.Repeat("-", max(0, l - len(text) - 4))
+	return "- " + text + " " + strings.Repeat("-", max(0, l-len(text)-4))
 }
 
 func listInto(results chan os.FileInfo, rootPath string, relPath string) {
@@ -361,7 +361,7 @@ func comparePaths(aRoot string, bRoot string, skipFull bool) {
 		}
 
 		checkedPercentage = float64(totalBytesChecked) / float64(totalBytesToCheck)
-		logger.log(fmt.Sprintf("%d file pair(s) at least %.2f%% equal (%d/%d bytes checked).", partiallyChecked, 100 * checkedPercentage, totalBytesChecked, totalBytesToCheck))
+		logger.log(fmt.Sprintf("%d file pair(s) at least %.2f%% equal (%d/%d bytes checked).", partiallyChecked, 100*checkedPercentage, totalBytesChecked, totalBytesToCheck))
 	}
 	if stats.unreadable > 0 {
 		logger.log(fmt.Sprintf("%d file pair(s) could not be compared.", stats.unreadable))
@@ -485,7 +485,7 @@ func readWorker(bytesRead chan ReadBlockResult, root_path string, work []NameAnd
 			}
 		} else {
 			// Read all the blocks except for the first and the last.
-			if work[i].size <= 2 * BLOCK_SIZE {
+			if work[i].size <= 2*BLOCK_SIZE {
 				// We already compared all of the blocks.
 				f.Close()
 				continue
@@ -493,8 +493,8 @@ func readWorker(bytesRead chan ReadBlockResult, root_path string, work []NameAnd
 
 			// fmt.Printf("\nReading %d: %s of %d bytes", i, work[i].name, work[i].size)
 			for offset := BLOCK_SIZE; offset < work[i].size-BLOCK_SIZE; offset += BLOCK_SIZE {
-				readTo := minInt64(offset + BLOCK_SIZE, work[i].size - BLOCK_SIZE)
-				if !mustRead(bytesRead, i, full_path, f, offset, &lastOffset, readTo - offset) {
+				readTo := minInt64(offset+BLOCK_SIZE, work[i].size-BLOCK_SIZE)
+				if !mustRead(bytesRead, i, full_path, f, offset, &lastOffset, readTo-offset) {
 					cancellations.cancel(i)
 					break
 				}
@@ -522,8 +522,8 @@ func indexOfDifference(blockA []byte, blockB []byte) int {
 func compareData(logger *Logger, stats *Stats, aRoot string, bRoot string, needDataCompare []NameAndSize, skipFull bool) {
 	cancelChannel := make(chan os.Signal, 1)
 	signal.Notify(cancelChannel, os.Interrupt)
-	go func(){
-		<- cancelChannel
+	go func() {
+		<-cancelChannel
 		stats.wasCancelled = true
 	}()
 
@@ -546,7 +546,7 @@ func compareData(logger *Logger, stats *Stats, aRoot string, bRoot string, needD
 	aResultsFull, bResultsFull := make(chan ReadBlockResult, DATA_DIFF_PIPELINE_DEPTH), make(chan ReadBlockResult, DATA_DIFF_PIPELINE_DEPTH)
 	go readWorker(aResultsFull, aRoot, needDataCompare, &cancellations, true)
 	go readWorker(bResultsFull, bRoot, needDataCompare, &cancellations, true)
-	stageCompareData(logger, stats, aRoot, bRoot, needDataCompare, &cancellations, aResultsFull, bResultsFull,)
+	stageCompareData(logger, stats, aRoot, bRoot, needDataCompare, &cancellations, aResultsFull, bResultsFull)
 }
 
 func stageCompareData(logger *Logger, stats *Stats, aRoot string, bRoot string, needDataCompare []NameAndSize, cancellations *CancellationIndex, aResults chan ReadBlockResult, bResults chan ReadBlockResult) {
@@ -555,7 +555,7 @@ func stageCompareData(logger *Logger, stats *Stats, aRoot string, bRoot string, 
 	aResult.index = -1
 	bResult.index = -1
 
-	needDataCompareLoop:
+needDataCompareLoop:
 	for i := 0; i < len(needDataCompare); i++ {
 		if stats.wasCancelled {
 			return
@@ -605,7 +605,7 @@ func stageCompareData(logger *Logger, stats *Stats, aRoot string, bRoot string, 
 
 				needDataCompare[i].differs = true
 
-				logger.writeOut(fmt.Sprintf("%v and counterpart differ on byte %d.", path.Join(aRoot, needDataCompare[i].name), aResult.offset + int64(indexOfDifference(aResult.block, bResult.block))))
+				logger.writeOut(fmt.Sprintf("%v and counterpart differ on byte %d.", path.Join(aRoot, needDataCompare[i].name), aResult.offset+int64(indexOfDifference(aResult.block, bResult.block))))
 				stats.notEqual++
 				break
 			}
@@ -626,7 +626,7 @@ func stageCompareData(logger *Logger, stats *Stats, aRoot string, bRoot string, 
 			} else {
 				fileProgress = float64(needDataCompare[i].checked) / float64(needDataCompare[i].size)
 			}
-			logger.progress("%10d/%10d: (%6.2f%%) %v", i, len(needDataCompare), 100 * fileProgress, needDataCompare[i].name)
+			logger.progress("%10d/%10d: (%6.2f%%) %v", i, len(needDataCompare), 100*fileProgress, needDataCompare[i].name)
 
 			if stats.wasCancelled {
 				return
