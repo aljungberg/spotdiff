@@ -626,7 +626,7 @@ func stageCompareData(logger *Logger, stats *Stats, aRoot string, bRoot string, 
 			} else {
 				fileProgress = float64(needDataCompare[i].checked) / float64(needDataCompare[i].size)
 			}
-			logger.progress("%10d/%10d: (%.2f%%) %v", i, len(needDataCompare), 100 * fileProgress, needDataCompare[i].name)
+			logger.progress("%10d/%10d: (%6.2f%%) %v", i, len(needDataCompare), 100 * fileProgress, needDataCompare[i].name)
 
 			aResult, aOk = <-aResults
 			bResult, bOk = <-bResults
