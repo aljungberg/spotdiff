@@ -628,6 +628,10 @@ func stageCompareData(logger *Logger, stats *Stats, aRoot string, bRoot string, 
 			}
 			logger.progress("%10d/%10d: (%6.2f%%) %v", i, len(needDataCompare), 100 * fileProgress, needDataCompare[i].name)
 
+			if stats.wasCancelled {
+				return
+			}
+
 			aResult, aOk = <-aResults
 			bResult, bOk = <-bResults
 		}
