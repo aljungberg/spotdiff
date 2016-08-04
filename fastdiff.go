@@ -480,12 +480,14 @@ func readWorker(bytesRead chan ReadBlockResult, root_path string, work []NameAnd
 			lastLength := minInt64(work[i].size-firstLength, BLOCK_SIZE)
 			if !mustRead(bytesRead, i, full_path, f, work[i].size-lastLength, &lastOffset, lastLength) {
 				cancellations.cancel(i)
+				f.Close()
 				continue
 			}
 		} else {
 			// Read all the blocks except for the first and the last.
 			if work[i].size <= 2 * BLOCK_SIZE {
 				// We already compared all of the blocks.
+				f.Close()
 				continue
 			}
 
