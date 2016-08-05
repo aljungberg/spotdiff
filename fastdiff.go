@@ -25,15 +25,24 @@ type NameAndSize struct {
 }
 
 type Stats struct {
-	aCount   int64
-	bCount   int64
-	aMissing int64
-	bMissing int64
+	aCount                    int64
+	bCount                    int64
+	aMissing                  int64
+	bMissing                  int64
 
-	unreadable    int64
-	notEqual      int64
-	completeCheck int
-	wasCancelled  bool
+	totalPairSize             int64
+	totalPairCount            int
+	failedPairSize            int64
+	failedPairCount           int
+	differingPairSize         int64
+	differingPairCount        int
+	fullyCheckedPairSize      int64
+	fullyCheckedPairCount     int
+	partiallyCheckedPairSize  int64
+	partiallyCheckedPairActuallyChecked  int64
+	partiallyCheckedPairCount int
+
+	wasCancelled              bool
 }
 
 const VERSION = "0.9.0"
@@ -213,6 +222,13 @@ func (lr *ListReader) advance() {
 	logger.progress("%10d: %v", lr.stats.aCount+lr.stats.aMissing, path.Join(lr.results.folder, lr.info.Name()))
 }
 
+func allOfZeroPercent(a int64, b int64) float64 {
+	if b == 0 {
+		return 1.0
+	}
+	return float64(a) / float64(b)
+}
+
 func comparePaths(aRoot string, bRoot string, skipFull bool) {
 	var needDataCompare []NameAndSize
 	var stats Stats
@@ -321,6 +337,8 @@ func comparePaths(aRoot string, bRoot string, skipFull bool) {
 
 			default:
 				// This name requires a byte by byte comparison.
+				stats.totalPairSize += lA.info.Size()
+				stats.totalPairCount++
 				needDataCompare = append(needDataCompare, NameAndSize{name: path.Join(lA.results.folder, lA.info.Name()), size: lA.info.Size()})
 			}
 
@@ -331,6 +349,10 @@ func comparePaths(aRoot string, bRoot string, skipFull bool) {
 	close(listWorkA)
 	close(listWorkB)
 
+	if len(needDataCompare) != stats.totalPairCount {
+		panic("len(needDataCompare) != stats.totalPairCount")
+	}
+
 	compareData(&logger, &stats, aRoot, bRoot, needDataCompare, skipFull)
 
 	logger.log(headlinePad("Result", 80))
@@ -338,43 +360,57 @@ func comparePaths(aRoot string, bRoot string, skipFull bool) {
 		logger.log("Interrupted before completion.")
 	}
 
-	checkedPercentage := 1.0
-	if stats.completeCheck > 0 {
-		logger.log(fmt.Sprintf("%d file pair(s) fully equal.", stats.completeCheck))
-	}
-
-	partiallyChecked := len(needDataCompare) - stats.completeCheck
-	if partiallyChecked > 0 {
-		// Not all files which were compared were fully compared.
-		var totalBytesChecked int64 = 0
-		var totalBytesToCheck int64 = 0
-		for i := 0; i < len(needDataCompare); i++ {
-			if needDataCompare[i].differs || needDataCompare[i].failed {
-				continue
-			}
-			totalBytesChecked += needDataCompare[i].checked
-			totalBytesToCheck += needDataCompare[i].size
-
-			if !stats.wasCancelled && !skipFull && needDataCompare[i].checked != needDataCompare[i].size {
-				panic(fmt.Sprintf("Failed to full check %s: %d/%d bytes checked.", needDataCompare[i].name, needDataCompare[i].checked, needDataCompare[i].size))
-			}
+	for i := 0; i < len(needDataCompare); i++ {
+		if needDataCompare[i].differs {
+			stats.differingPairSize += needDataCompare[i].size
+			stats.differingPairCount++
+			continue
+		}
+		if needDataCompare[i].failed {
+			stats.failedPairSize += needDataCompare[i].size
+			stats.failedPairCount++
+			continue
 		}
 
-		checkedPercentage = float64(totalBytesChecked) / float64(totalBytesToCheck)
-		logger.log(fmt.Sprintf("%d file pair(s) at least %.2f%% equal (%d/%d bytes checked).", partiallyChecked, 100*checkedPercentage, totalBytesChecked, totalBytesToCheck))
+		if !stats.wasCancelled && !skipFull && needDataCompare[i].checked != needDataCompare[i].size {
+			panic(fmt.Sprintf("Failed to full check %s: %d/%d bytes checked.", needDataCompare[i].name, needDataCompare[i].checked, needDataCompare[i].size))
+		}
+
+		if needDataCompare[i].checked == needDataCompare[i].size {
+			stats.fullyCheckedPairSize += needDataCompare[i].size
+			stats.fullyCheckedPairCount++
+		} else {
+			stats.partiallyCheckedPairSize += needDataCompare[i].size
+			stats.partiallyCheckedPairActuallyChecked += needDataCompare[i].checked
+			stats.partiallyCheckedPairCount++
+		}
 	}
-	if stats.unreadable > 0 {
-		logger.log(fmt.Sprintf("%d file pair(s) could not be compared.", stats.unreadable))
+
+	if stats.differingPairCount + stats.failedPairCount + stats.fullyCheckedPairCount + stats.partiallyCheckedPairCount != stats.totalPairCount {
+		panic("Incorrect stats.")
 	}
+
+	logger.log(fmt.Sprintf("          Total: %d file pairs (%d bytes)", stats.totalPairCount, stats.totalPairSize))
+	logger.log(fmt.Sprintf("    Fully equal: %d file pairs (%d bytes, %.2f%%)", stats.fullyCheckedPairCount, stats.fullyCheckedPairSize, 100*allOfZeroPercent(stats.fullyCheckedPairSize, stats.totalPairSize)))
+	logger.log(fmt.Sprintf("Partially equal: %d file pairs (%d bytes, %.2f%%)", stats.partiallyCheckedPairCount, stats.partiallyCheckedPairSize, 100*allOfZeroPercent(stats.partiallyCheckedPairSize, stats.totalPairSize)))
+	if stats.partiallyCheckedPairActuallyChecked > 0 {
+		logger.log(fmt.Sprintf("(Of the partially checked files, %d bytes or %.2f%% were tested.)", stats.partiallyCheckedPairActuallyChecked, 100*allOfZeroPercent(stats.partiallyCheckedPairActuallyChecked, stats.partiallyCheckedPairSize)))
+	}
+	if stats.differingPairCount == 0 && stats.failedPairSize == 0 && stats.aMissing == 0 && stats.bMissing == 0 {
+		return
+	}
+
+	logger.log("")
+	logger.log(fmt.Sprintf("      Differing: %d file pairs (%d bytes, %.2f%%)", stats.differingPairCount, stats.differingPairSize, 100*allOfZeroPercent(stats.differingPairSize, stats.totalPairSize)))
+	logger.log(fmt.Sprintf("     Unreadable: %d file pairs (%d bytes, %.2f%%)", stats.failedPairCount, stats.failedPairSize, 100*allOfZeroPercent(stats.failedPairSize, stats.totalPairSize)))
+
 	if stats.aMissing > 0 {
-		logger.log(fmt.Sprintf("At least %d missing file(s) in %v.", stats.aMissing, aRoot))
+		logger.log(fmt.Sprintf("   Missing left: at least %d missing file(s) in %v.", stats.aMissing, aRoot))
 	}
 	if stats.bMissing > 0 {
-		logger.log(fmt.Sprintf("At least %d missing file(s) in %v.", stats.bMissing, bRoot))
+		logger.log(fmt.Sprintf("  Missing right: at least %d missing file(s) in %v.", stats.bMissing, bRoot))
 	}
-	if stats.notEqual > 0 {
-		logger.log(fmt.Sprintf("At least %d file pair(s) have byte level differences.", stats.notEqual))
-	}
+
 }
 
 type ReadBlockResult struct {
@@ -571,7 +607,6 @@ needDataCompareLoop:
 			if i == aResult.index && aResult.err != nil {
 				if !needDataCompare[i].failed {
 					needDataCompare[i].failed = true
-					stats.unreadable++
 				}
 				break
 			}
@@ -582,7 +617,6 @@ needDataCompareLoop:
 			if i == bResult.index && bResult.err != nil {
 				if !needDataCompare[i].failed {
 					needDataCompare[i].failed = true
-					stats.unreadable++
 				}
 				break
 			}
@@ -606,7 +640,6 @@ needDataCompareLoop:
 				needDataCompare[i].differs = true
 
 				logger.writeOut(fmt.Sprintf("%v and counterpart differ on byte %d.", path.Join(aRoot, needDataCompare[i].name), aResult.offset+int64(indexOfDifference(aResult.block, bResult.block))))
-				stats.notEqual++
 				break
 			}
 
@@ -614,10 +647,6 @@ needDataCompareLoop:
 
 			if needDataCompare[i].checked > needDataCompare[i].size {
 				panic(fmt.Sprintf("%d: Compared more data (%d) than there are bytes in %s (%d)!", i, needDataCompare[i].checked, needDataCompare[i].name, needDataCompare[i].size))
-			}
-
-			if needDataCompare[i].checked == needDataCompare[i].size {
-				stats.completeCheck++
 			}
 
 			var fileProgress float64
