@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	tm "github.com/buger/goterm"
-	flag "github.com/ogier/pflag"
+	flag "github.com/spf13/pflag"
 	"github.com/pkg/profile"
 	"io"
 	"io/ioutil"
@@ -45,7 +45,7 @@ type Stats struct {
 	wasCancelled              bool
 }
 
-const VERSION = "0.9.0"
+const VERSION = "0.9.1"
 
 const BLOCK_SIZE int64 = 16 * 1024
 const FOLDER_LISTING_PIPELINE_DEPTH = 16
@@ -143,7 +143,7 @@ func headlinePad(text string, l int) string {
 	return "- " + text + " " + strings.Repeat("-", max(0, l-len(text)-4))
 }
 
-func listInto(results chan os.FileInfo, rootPath string, relPath string) {
+func listInto(results chan os.FileInfo, rootPath string, relPath string, filter pathFilter) {
 	defer close(results)
 
 	// It's important that the results are sorted.
@@ -155,6 +155,9 @@ func listInto(results chan os.FileInfo, rootPath string, relPath string) {
 	}
 
 	for _, file := range files {
+		if !filter.includes(path.Join(relPath, file.Name())) {
+			continue
+		}
 		results <- file
 	}
 
@@ -166,13 +169,13 @@ type ListResult struct {
 	result chan os.FileInfo
 }
 
-func listWorker(results chan ListResult, rootPath string, folders chan string) {
+func listWorker(results chan ListResult, rootPath string, folders chan string, filter pathFilter) {
 	defer close(results)
 
 	for folder := range folders {
 		result := make(chan os.FileInfo, FOLDER_ENTRY_READ_AHEAD)
 		results <- ListResult{folder, result}
-		listInto(result, rootPath, folder)
+		listInto(result, rootPath, folder, filter)
 	}
 }
 
@@ -222,6 +225,39 @@ func (lr *ListReader) advance() {
 	logger.progress("%10d: %v", lr.stats.aCount+lr.stats.aMissing, path.Join(lr.results.folder, lr.info.Name()))
 }
 
+type pathFilterRule struct {
+	pattern string
+	isAccept bool
+}
+
+func (r *pathFilterRule) matches(relativePath string) bool {
+	// Full path match when the pattern starts with /.
+	if strings.HasPrefix(r.pattern, "/") && strings.Compare(r.pattern[1:], relativePath) == 0 {
+		return true
+	}
+
+	// Last element only match.
+	var base = path.Base(relativePath)
+	return strings.Compare(r.pattern, base) == 0
+}
+
+type pathFilter struct {
+	rules []pathFilterRule
+}
+
+func (pf *pathFilter) addExclude(pattern string) {
+	pf.rules = append(pf.rules, pathFilterRule{pattern, false})
+}
+
+func (pf *pathFilter) includes(relativePath string) bool {
+	for _, rule := range pf.rules {
+		if rule.matches(relativePath) {
+			return rule.isAccept
+		}
+	}
+	return true
+}
+
 func allOfZeroPercent(a int64, b int64) float64 {
 	if b == 0 {
 		return 1.0
@@ -229,7 +265,7 @@ func allOfZeroPercent(a int64, b int64) float64 {
 	return float64(a) / float64(b)
 }
 
-func comparePaths(aRoot string, bRoot string, skipFull bool) {
+func comparePaths(aRoot string, bRoot string, skipFull bool, filter pathFilter) {
 	var needDataCompare []NameAndSize
 	var stats Stats
 	var folderWorkOverflow []string
@@ -240,7 +276,10 @@ func comparePaths(aRoot string, bRoot string, skipFull bool) {
 	listResultsA, listResultsB := make(chan ListResult, FOLDER_LISTING_PIPELINE_DEPTH), make(chan ListResult, FOLDER_LISTING_PIPELINE_DEPTH)
 
 	enqueueListFolder := func(folder string) {
-		waitingForFolders++
+		if !filter.includes(folder) {
+			return
+		}
+ 		waitingForFolders++
 		if len(listWorkA) == cap(listWorkA) || len(listWorkB) == cap(listWorkB) {
 			folderWorkOverflow = append(folderWorkOverflow, folder)
 			return
@@ -268,8 +307,8 @@ func comparePaths(aRoot string, bRoot string, skipFull bool) {
 	// We probably don't want more than 2 workers since that'd make our disk read pattern more random as different
 	// workers work on different folders at the same time. But 2 is a good number since source and destination will
 	// often be different disks.
-	go listWorker(listResultsA, aRoot, listWorkA)
-	go listWorker(listResultsB, bRoot, listWorkB)
+	go listWorker(listResultsA, aRoot, listWorkA, filter)
+	go listWorker(listResultsB, bRoot, listWorkB, filter)
 
 	lA := ListReader{stats: &stats, resultCounter: &stats.aCount}
 	lB := ListReader{stats: &stats, resultCounter: &stats.bCount}
@@ -684,7 +723,7 @@ the search early, while still allowing the option to keep running to a 100%% com
 	var skipFull = flag.Bool("skip-full", false, fmt.Sprintf("only compare the first and last %d bytes of each file; stop immediately after the quick compare stage", BLOCK_SIZE))
 	var printVersion = flag.Bool("version", false, "output version information and exit")
 	var quiet = flag.BoolP("quiet", "q", false, "suppress progress and final summary message; only print differences found")
-
+	var excludes = flag.StringArrayP("exclude", "", nil, "exclude files mattching the given pattern")
 	flag.Parse()
 
 	if *printVersion {
@@ -704,6 +743,11 @@ the search early, while still allowing the option to keep running to a 100%% com
 		aRoot, bRoot = bRoot, aRoot
 	}
 
+	var filter = pathFilter{}
+	for _, excludePattern := range *excludes {
+		filter.addExclude(excludePattern)
+	}
+
 	if false {
 		defer profile.Start().Stop()
 	}
@@ -711,6 +755,6 @@ the search early, while still allowing the option to keep running to a 100%% com
 	quitLogger := make(chan int)
 	logger = Logger{quiet: *quiet}
 	go logger.run(quitLogger)
-	comparePaths(aRoot, bRoot, *skipFull)
+	comparePaths(aRoot, bRoot, *skipFull, filter)
 	close(quitLogger)
 }
