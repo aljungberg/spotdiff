@@ -671,7 +671,10 @@ func main() {
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, `
 Usage: %s [OPTION]... FILE FILE
-Recursively compare the paths given by FILEs and try to quickly find differences between the two. Fastdiff reports obvious differences quickly, and only after that goes into a full byte by byte comparison.
+Recursively compare the paths given by FILEs and try to quickly find differences between the two. Fastdiff finds obvious
+differences quickly, and reports them immediately, but then keeps looking. The longer fastdiff runs, the smaller the
+chance any unreported differences remain. This allows a user who is fairly confident there are no differences to stop
+the search early, while still allowing the option to keep running to a 100%% completion in other situations.
 
 `,
 			os.Args[0])
