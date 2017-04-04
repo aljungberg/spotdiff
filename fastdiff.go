@@ -7,13 +7,14 @@ import (
 	flag "github.com/spf13/pflag"
 	"github.com/pkg/profile"
 	"io"
-	"io/ioutil"
+	"./normio"
 	"os"
 	"os/signal"
 	"path"
 	"strings"
 	"sync"
 	"time"
+	"encoding/hex"
 )
 
 type NameAndSize struct {
@@ -52,6 +53,7 @@ const FOLDER_LISTING_PIPELINE_DEPTH = 16
 const FOLDER_ENTRY_READ_AHEAD = 64
 const DATA_DIFF_PIPELINE_DEPTH = 128
 const PROGRESS_FREQUENCY = 200 * time.Millisecond
+const DEBUG_UTF = false
 
 type Logger struct {
 	onProgressLine     bool
@@ -143,11 +145,11 @@ func headlinePad(text string, l int) string {
 	return "- " + text + " " + strings.Repeat("-", max(0, l-len(text)-4))
 }
 
-func listInto(results chan os.FileInfo, rootPath string, relPath string, filter pathFilter) {
+func listInto(results chan normioutil.NormFileInfo, rootPath string, relPath string, filter pathFilter) {
 	defer close(results)
 
 	// It's important that the results are sorted.
-	files, err := ioutil.ReadDir(path.Join(rootPath, relPath))
+	files, err := normioutil.ReadDir(path.Join(rootPath, relPath))
 
 	if err != nil {
 		logger.log(fmt.Sprintf("Unable to read %v.", path.Join(rootPath, relPath)))
@@ -166,14 +168,14 @@ func listInto(results chan os.FileInfo, rootPath string, relPath string, filter 
 
 type ListResult struct {
 	folder string
-	result chan os.FileInfo
+	result chan normioutil.NormFileInfo
 }
 
 func listWorker(results chan ListResult, rootPath string, folders chan string, filter pathFilter) {
 	defer close(results)
 
 	for folder := range folders {
-		result := make(chan os.FileInfo, FOLDER_ENTRY_READ_AHEAD)
+		result := make(chan normioutil.NormFileInfo, FOLDER_ENTRY_READ_AHEAD)
 		results <- ListResult{folder, result}
 		listInto(result, rootPath, folder, filter)
 	}
@@ -202,7 +204,7 @@ func min(a, b int) int {
 
 type ListReader struct {
 	results       ListResult
-	info          os.FileInfo
+	info          normioutil.NormFileInfo
 	didAdvance    bool
 	stats         *Stats
 	resultCounter *int64
@@ -232,13 +234,13 @@ type pathFilterRule struct {
 
 func (r *pathFilterRule) matches(relativePath string) bool {
 	// Full path match when the pattern starts with /.
-	if strings.HasPrefix(r.pattern, "/") && strings.Compare(r.pattern[1:], relativePath) == 0 {
+	if strings.HasPrefix(r.pattern, "/") && r.pattern[1:] == relativePath {
 		return true
 	}
 
 	// Last element only match.
 	var base = path.Base(relativePath)
-	return strings.Compare(r.pattern, base) == 0
+	return r.pattern == base
 }
 
 type pathFilter struct {
@@ -328,12 +330,18 @@ func comparePaths(aRoot string, bRoot string, skipFull bool, filter pathFilter) 
 		lB.advance()
 		for {
 			for lA.didAdvance && (!lB.didAdvance || lA.info.Name() < lB.info.Name()) {
+				if (DEBUG_UTF && lB.didAdvance) {
+					logger.writeOut(fmt.Sprintf("%v != %v", hex.Dump([]byte(lA.info.Name())), hex.Dump([]byte(lB.info.Name()))))
+				}
 				logger.writeOut(fmt.Sprintf("%v missing.", path.Join(bRoot, lA.results.folder, lA.info.Name())))
 				stats.bMissing++
 				lA.advance()
 			}
 
 			for lB.didAdvance && (!lA.didAdvance || lA.info.Name() > lB.info.Name()) {
+				if (DEBUG_UTF && lA.didAdvance) {
+					logger.writeOut(fmt.Sprintf("%v != %v", hex.Dump([]byte(lA.info.Name())), hex.Dump([]byte(lB.info.Name()))))
+				}
 				logger.writeOut(fmt.Sprintf("%v missing.", path.Join(aRoot, lA.results.folder, lB.info.Name())))
 				stats.aMissing++
 				lB.advance()
