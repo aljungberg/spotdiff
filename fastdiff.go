@@ -720,8 +720,8 @@ func main() {
 Usage: %s [OPTION]... FILE FILE
 Recursively compare the paths given by FILEs and try to quickly find differences between the two. Fastdiff finds obvious
 differences quickly, and reports them immediately, but then keeps looking. The longer fastdiff runs, the smaller the
-chance any unreported differences remain. This allows a user who is fairly confident there are no differences to stop
-the search early, while still allowing the option to keep running to a 100%% completion in other situations.
+chance that any unreported differences remain. This allows a user who is fairly confident there are no differences to stop
+the search early, while still allowing the option to keep running to 100%% completion in other situations.
 
 `,
 			os.Args[0])
@@ -731,7 +731,7 @@ the search early, while still allowing the option to keep running to a 100%% com
 	var skipFull = flag.Bool("skip-full", false, fmt.Sprintf("only compare the first and last %d bytes of each file; stop immediately after the quick compare stage", BLOCK_SIZE))
 	var printVersion = flag.Bool("version", false, "output version information and exit")
 	var quiet = flag.BoolP("quiet", "q", false, "suppress progress and final summary message; only print differences found")
-	var excludes = flag.StringArrayP("exclude", "", nil, "exclude files mattching the given pattern")
+	var excludes = flag.StringArrayP("exclude", "", nil, "exclude files matching the given pattern")
 	flag.Parse()
 
 	if *printVersion {
