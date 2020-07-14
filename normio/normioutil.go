@@ -27,6 +27,12 @@ func (fi *NormFileInfo) Name() string {
     return norm.NFC.String(fi.FileInfo.Name())
 }
 
+func (fi *NormFileInfo) FileName() string {
+    // Return the file name without normalisation.
+    return fi.FileInfo.Name()
+}
+
+
 type byName []NormFileInfo
 
 func (f byName) Len() int           { return len(f) }

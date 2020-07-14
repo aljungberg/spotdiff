@@ -365,11 +365,11 @@ func comparePaths(aRoot string, bRoot string, skipFull bool, filter pathFilter) 
             case lB.info.Mode()&os.ModeSymlink != 0 && lA.info.Mode()&os.ModeSymlink == 0:
                 logger.writeOut(fmt.Sprintf("%v is a symlink but counterpart is not.", path.Join(bRoot, lA.results.folder, lB.info.Name())))
             case lA.info.Mode()&os.ModeSymlink != 0:
-                aLink, aErr := os.Readlink(path.Join(aRoot, lA.results.folder, lA.info.Name()))
+                aLink, aErr := os.Readlink(path.Join(aRoot, lA.results.folder, lA.info.FileName()))
                 if aErr != nil {
                     logger.error(fmt.Sprintf("Unable to read symlink of %v.", path.Join(aRoot, lA.results.folder, lA.info.Name())))
                 } else {
-                    bLink, bErr := os.Readlink(path.Join(aRoot, lA.results.folder, lA.info.Name()))
+                    bLink, bErr := os.Readlink(path.Join(aRoot, lA.results.folder, lA.info.FileName()))
                     if bErr != nil {
                         logger.error(fmt.Sprintf("Unable to read symlink of %v.", path.Join(bRoot, lA.results.folder, lB.info.Name())))
                     } else if aLink != bLink {
@@ -378,7 +378,7 @@ func comparePaths(aRoot string, bRoot string, skipFull bool, filter pathFilter) 
                 }
             case lA.info.IsDir():
                 // Go depth first into folders.
-                enqueueListFolder(path.Join(lA.results.folder, lA.info.Name()))
+                enqueueListFolder(path.Join(lA.results.folder, lA.info.FileName()))
             case lA.info.Size() != lB.info.Size():
                 logger.writeOut(fmt.Sprintf("%v is %d bytes but counterpart is %d bytes (%d byte(s) difference).", path.Join(aRoot, lA.results.folder, lA.info.Name()), lA.info.Size(), lB.info.Size(), lB.info.Size()-lA.info.Size()))
 
@@ -386,7 +386,7 @@ func comparePaths(aRoot string, bRoot string, skipFull bool, filter pathFilter) 
                 // This name requires a byte by byte comparison.
                 stats.totalPairSize += lA.info.Size()
                 stats.totalPairCount++
-                needDataCompare = append(needDataCompare, NameAndSize{name: path.Join(lA.results.folder, lA.info.Name()), size: lA.info.Size()})
+                needDataCompare = append(needDataCompare, NameAndSize{name: path.Join(lA.results.folder, lA.info.FileName()), size: lA.info.Size()})
             }
 
             lA.advance()
