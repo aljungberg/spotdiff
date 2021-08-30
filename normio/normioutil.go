@@ -1,9 +1,9 @@
 package normioutil
 
 import (
-    "golang.org/x/text/unicode/norm"
-    "os"
-    "sort"
+	"golang.org/x/text/unicode/norm"
+	"os"
+	"sort"
 )
 
 //
@@ -20,18 +20,17 @@ import (
 //
 
 type NormFileInfo struct {
-    os.FileInfo
+	os.FileInfo
 }
 
 func (fi *NormFileInfo) Name() string {
-    return norm.NFC.String(fi.FileInfo.Name())
+	return norm.NFC.String(fi.FileInfo.Name())
 }
 
 func (fi *NormFileInfo) FileName() string {
-    // Return the file name without normalisation.
-    return fi.FileInfo.Name()
+	// Return the file name without normalisation.
+	return fi.FileInfo.Name()
 }
-
 
 type byName []NormFileInfo
 
@@ -42,24 +41,24 @@ func (f byName) Swap(i, j int)      { f[i], f[j] = f[j], f[i] }
 // ReadDir reads the directory named by dirname and returns
 // a list of directory entries sorted by filename.
 func ReadDir(dirname string) ([]NormFileInfo, error) {
-    f, err := os.Open(dirname)
-    if err != nil {
-        return nil, err
-    }
-    unwrapped, err := f.Readdir(-1)
-    f.Close()
-    if err != nil {
-        return nil, err
-    }
+	f, err := os.Open(dirname)
+	if err != nil {
+		return nil, err
+	}
+	unwrapped, err := f.Readdir(-1)
+	f.Close()
+	if err != nil {
+		return nil, err
+	}
 
-    // TODO Could reimplement at the os/file_unix level to make NormFileInfo from the start and
-    // get rid of the temporary list, save some memory. Probably not worth the extra complexity
-    // though.
-    var wrapped = make([]NormFileInfo, len(unwrapped))
-    for i, entry := range unwrapped {
-        wrapped[i] = NormFileInfo{entry}
-    }
+	// TODO Could reimplement at the os/file_unix level to make NormFileInfo from the start and
+	// get rid of the temporary list, save some memory. Probably not worth the extra complexity
+	// though.
+	var wrapped = make([]NormFileInfo, len(unwrapped))
+	for i, entry := range unwrapped {
+		wrapped[i] = NormFileInfo{entry}
+	}
 
-    sort.Sort(byName(wrapped))
-    return wrapped, nil
+	sort.Sort(byName(wrapped))
+	return wrapped, nil
 }
