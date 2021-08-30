@@ -1,12 +1,16 @@
-Compare two folders, fast.
+Spot the difference between two folders, fast.
 
-Fastdiff reports blatant differences as quickly as possible, and then finds non-obvious differences given more time. 
+Spotdiff compares two folders, searching for the differences. Spotdiff finds basic differences quickly and then keeps searching for more subtle differences until you're satisfied. If you don't stop it, it'll finish after a complete byte for byte comparison of every single file.
 
-If a whole subfolder or file is missing, you'll know within moments. A more subtle difference like a single byte in the beginning of a file you'll know "soon". A very well hidden difference like a byte in a random spot in a huge file, you'll know "eventually".
+Use this tool to verify that your backup copies agree with your originals, that two mirrors between servers are equal, or to check if that folder you duplicated three years ago to make some changes -- did you actually ever do any work or is it just duplicate data?
 
-The longer fastdiff runs, the smaller the chance that any unreported differences remain. This allows a user who is fairly confident that there are no differences to stop the search early. Run fastdiff long enough and it'll do a complete byte for byte comparison.
+A key feature of spotdiff is its progressive nature. The tool will try to spot clear differences as early as possible in the search, allowing you to cancel the search when you've seen what you need to see. In a technical sense, the tool trades throughput for latency. A tool which just read all the files in order and did a byte by byte comparison immediately might be more efficient, yet take much longer to find a diff in the first byte of the last file. 
 
-Some uses:
+Spotdiff performs multiple passes over the set of files, each pass going a little more into detail. This is key when comparing very large folders. If comparing everything is going to take 3 days, you want a tool like spotdiff so you might have initial reports of differences after just a few minutes.
+
+When a whole subfolder or file is missing, you'll know it within moments. A more subtle difference like a single byte in the beginning of a file you'll know "soon". A very well hidden difference like a byte in a random spot in a huge file, you'll know "eventually". The longer spotdiff runs, the smaller the chance that any unreported differences remain. 
+
+Use spotdiff to answer questions like:
 
 - Do I need to re-sync this backup copy, is it up to date?
 - Is this folder an accidental duplicate of this other folder?
@@ -17,7 +21,7 @@ Personally I use it to verify my backups.
 ## Example output
 
 ```
-$ fastdiff test/a test/b
+$ spotdiff test/a test/b
 - Finding files ---------------------------------------------------------------
 test/b/a_only.txt missing.
 test/a/b_only.txt missing.
@@ -54,8 +58,6 @@ Partially equal: 0 file pairs (0 bytes, 0.00%)
 ## Building
 
 ```
-export GOPATH=$HOME/golang
-go get
 go build
 ```
 
