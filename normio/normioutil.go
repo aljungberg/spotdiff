@@ -15,7 +15,7 @@ import (
 // Filesystem A has a file named "Américo" encoded as 41 6d 65 cc 81 72 69 63 6f.
 // Filesystem B has a file named "Américo" encoded as 41 6d c3 a9 72 69 63 6f.
 //
-// These filenames are in fact the equal. They only differ in how the value is encoded. We normalise them to
+// These filenames are in fact equal. They only differ in how the value is encoded. We normalise them to
 // NFC form and voila, they will sort into the same slot in our filename list and compare equal with ==.
 //
 
