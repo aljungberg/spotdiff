@@ -1,14 +1,14 @@
-Spot the difference between two folders, fast.
+# spotdiff: The faster way to spot differences between folders
 
-Spotdiff compares two folders, searching for the differences. Spotdiff finds basic differences quickly and then keeps searching for more subtle differences until you're satisfied. If you don't stop it, it'll finish after a complete byte for byte comparison of every single file.
+Spotdiff scans your folders and reports differences immediately, then digs deeper to find even the smallest changes. Stop it anytime you're confident you've seen what you need, or let it go the distance for a full byte-by-byte comparison.
 
-Use this tool to verify that your backup copies agree with your originals, that two mirrors between servers are equal, or to check if that folder you duplicated three years ago to make some changes -- did you actually ever do any work or is it just duplicate data?
+Spotdiff is faster than other comparison tools like `diff -r` or `rsync --dry-run` because it doesn't work sequentially. Spotdiff uses a progressive search strategy that prioritizes breadth over depth first.
 
-A key feature of spotdiff is its progressive nature. The tool will try to spot clear differences as early as possible in the search, allowing you to cancel the search when you've seen what you need to see. In a technical sense, the tool trades throughput for latency. A tool which just read all the files in order and did a byte by byte comparison immediately might be more efficient, yet take much longer to find a diff in the first byte of the last file. 
+Use spotdiff to quickly find missing files or corrupted copies, saving you time and ensuring that your data is safe.
 
-Spotdiff performs multiple passes over the set of files, each pass going a little more into detail. This is key when comparing very large folders. If comparing everything is going to take 3 days, you want a tool like spotdiff so you might have initial reports of differences after just a few minutes.
+A key feature of spotdiff is its progressive nature. The tool will try to spot clear differences as early as possible in the search, allowing you to cancel the search when you've seen what you need to see. In a sense, we trade throughput for latency. Skipping around like spotdiff does might take slightly more total time than a sequential byte-by-byte diff, but the "time to first difference found" is much shorter on average.
 
-When a whole subfolder or file is missing, you'll know it within moments. A more subtle difference like a single byte in the beginning of a file you'll know "soon". A very well hidden difference like a byte in a random spot in a huge file, you'll know "eventually". The longer spotdiff runs, the smaller the chance that any unreported differences remain. 
+Spotdiff performs multiple passes over the set of files, each pass deeper. This is key when comparing very large folders. If comparing everything is going to take 3 days, you want a tool like spotdiff so you might have initial reports of differences after just a few minutes. When a whole subfolder or file is missing, you'll know it within moments. A more subtle difference like a single byte in the beginning of a file you'll know "soon". A very well hidden difference like a byte in a random spot in a huge file, you'll know "eventually". The longer spotdiff runs, the smaller the chance that any unreported differences remain. 
 
 Use spotdiff to answer questions like:
 
@@ -17,6 +17,12 @@ Use spotdiff to answer questions like:
 - Has this copy been corrupted (bit rotted) on disk?
 
 Personally I use it to verify my backups.
+
+The search strategy is as follows:
+
+- Pass 1: Breadth-first directory scan to find missing files and subfolders, prioritizing differences closer to the root of the tree.
+- Pass 2: Compare the first and last 16 kB of every file for an initial "quick comparison", identifying obvious problems like zeroed or garbled files.
+- Pass 3: Perform a full comparison of the remaining bytes of every file, excluding the first and trailing 16kB to avoid redundancy.
 
 ## Example output
 
