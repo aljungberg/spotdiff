@@ -46,14 +46,14 @@ type Stats struct {
 	wasCancelled bool
 }
 
-const VERSION = "0.9.2"
+const Version = "0.9.3"
 
-const BLOCK_SIZE int64 = 16 * 1024
-const FOLDER_LISTING_PIPELINE_DEPTH = 16
-const FOLDER_ENTRY_READ_AHEAD = 64
-const DATA_DIFF_PIPELINE_DEPTH = 128
-const PROGRESS_FREQUENCY = 200 * time.Millisecond
-const DEBUG_UTF = false
+const BlockSize int64 = 16 * 1024
+const FolderListingPipelineDepth = 16
+const FolderEntryReadAhead = 64
+const DataDiffPipelineDepth = 128
+const ProgressFrequency = 200 * time.Millisecond
+const DebugUtf = false
 
 type Logger struct {
 	onProgressLine     bool
@@ -90,7 +90,7 @@ func (l *Logger) run(quit chan int) {
 			if text != "" {
 				l._progress(text)
 			}
-			time.Sleep(PROGRESS_FREQUENCY)
+			time.Sleep(ProgressFrequency)
 		}
 	}
 }
@@ -175,7 +175,7 @@ func listWorker(results chan ListResult, rootPath string, folders chan string, f
 	defer close(results)
 
 	for folder := range folders {
-		result := make(chan normioutil.NormFileInfo, FOLDER_ENTRY_READ_AHEAD)
+		result := make(chan normioutil.NormFileInfo, FolderEntryReadAhead)
 		results <- ListResult{folder, result}
 		listInto(result, rootPath, folder, filter)
 	}
@@ -274,8 +274,8 @@ func comparePaths(aRoot string, bRoot string, skipFull bool, filter pathFilter) 
 
 	waitingForFolders := 0
 
-	listWorkA, listWorkB := make(chan string, FOLDER_LISTING_PIPELINE_DEPTH), make(chan string, FOLDER_LISTING_PIPELINE_DEPTH)
-	listResultsA, listResultsB := make(chan ListResult, FOLDER_LISTING_PIPELINE_DEPTH), make(chan ListResult, FOLDER_LISTING_PIPELINE_DEPTH)
+	listWorkA, listWorkB := make(chan string, FolderListingPipelineDepth), make(chan string, FolderListingPipelineDepth)
+	listResultsA, listResultsB := make(chan ListResult, FolderListingPipelineDepth), make(chan ListResult, FolderListingPipelineDepth)
 
 	enqueueListFolder := func(folder string) {
 		if !filter.includes(folder) {
@@ -330,7 +330,7 @@ func comparePaths(aRoot string, bRoot string, skipFull bool, filter pathFilter) 
 		lB.advance()
 		for {
 			for lA.didAdvance && (!lB.didAdvance || lA.info.Name() < lB.info.Name()) {
-				if DEBUG_UTF && lB.didAdvance {
+				if DebugUtf && lB.didAdvance {
 					logger.writeOut(fmt.Sprintf("%v != %v", hex.Dump([]byte(lA.info.Name())), hex.Dump([]byte(lB.info.Name()))))
 				}
 				logger.writeOut(fmt.Sprintf("%v missing.", path.Join(bRoot, lA.results.folder, lA.info.Name())))
@@ -339,7 +339,7 @@ func comparePaths(aRoot string, bRoot string, skipFull bool, filter pathFilter) 
 			}
 
 			for lB.didAdvance && (!lA.didAdvance || lA.info.Name() > lB.info.Name()) {
-				if DEBUG_UTF && lA.didAdvance {
+				if DebugUtf && lA.didAdvance {
 					logger.writeOut(fmt.Sprintf("%v != %v", hex.Dump([]byte(lA.info.Name())), hex.Dump([]byte(lB.info.Name()))))
 				}
 				logger.writeOut(fmt.Sprintf("%v missing.", path.Join(aRoot, lA.results.folder, lB.info.Name())))
@@ -467,26 +467,26 @@ type ReadBlockResult struct {
 	err    error
 }
 
-func mustRead(bytesRead chan ReadBlockResult, index int, full_path string, f io.ReadSeeker, offset int64, lastOffset *int64, size int64) bool {
+func mustRead(bytesRead chan ReadBlockResult, index int, fullPath string, f io.ReadSeeker, offset int64, lastOffset *int64, size int64) bool {
 	// fmt.Printf("\nmustRead %v:%v", index, offset)
 	if offset != *lastOffset {
 		_, err := f.Seek(offset, 0)
 		if err != nil {
-			logger.error(fmt.Sprintf("Unable to read %v (%v).", full_path, err))
+			logger.error(fmt.Sprintf("Unable to read %v (%v).", fullPath, err))
 			bytesRead <- ReadBlockResult{index: index, err: err}
 			return false
 		}
 	}
 
 	buf := make([]byte, size)
-	n, err := io.ReadAtLeast(f, buf, int(minInt64(BLOCK_SIZE, size)))
+	n, err := io.ReadAtLeast(f, buf, int(minInt64(BlockSize, size)))
 	if err != nil {
-		logger.error(fmt.Sprintf("Unable to read %v (%v).", full_path, err))
+		logger.error(fmt.Sprintf("Unable to read %v (%v).", fullPath, err))
 		bytesRead <- ReadBlockResult{index: index, err: err}
 		return false
 	}
 	if int(size) != n {
-		logger.error(fmt.Sprintf("Unable to read %v (unexpected end of file).", full_path))
+		logger.error(fmt.Sprintf("Unable to read %v (unexpected end of file).", fullPath))
 		bytesRead <- ReadBlockResult{index: index, err: io.ErrUnexpectedEOF}
 		return false
 	}
@@ -513,7 +513,7 @@ func (c *CancellationIndex) isCancelled(index int) bool {
 	return c.cancellations[index]
 }
 
-func readWorker(bytesRead chan ReadBlockResult, root_path string, work []NameAndSize, cancellations *CancellationIndex, full bool) {
+func readWorker(bytesRead chan ReadBlockResult, rootPath string, work []NameAndSize, cancellations *CancellationIndex, full bool) {
 	defer close(bytesRead)
 
 	for i := 0; i < len(work); i++ {
@@ -525,12 +525,12 @@ func readWorker(bytesRead chan ReadBlockResult, root_path string, work []NameAnd
 			continue
 		}
 
-		full_path := path.Join(root_path, work[i].name)
+		fullPath := path.Join(rootPath, work[i].name)
 		// fmt.Printf("\nreading %v", i)
 
-		f, err := os.Open(full_path)
+		f, err := os.Open(fullPath)
 		if err != nil {
-			logger.error(fmt.Sprintf("Unable to read %v (%v).", full_path, err))
+			logger.error(fmt.Sprintf("Unable to read %v (%v).", fullPath, err))
 			bytesRead <- ReadBlockResult{index: i, err: err}
 			cancellations.cancel(i)
 			f.Close()
@@ -541,8 +541,8 @@ func readWorker(bytesRead chan ReadBlockResult, root_path string, work []NameAnd
 
 		if !full {
 			// Get the first block.
-			firstLength := minInt64(BLOCK_SIZE, work[i].size)
-			if !mustRead(bytesRead, i, full_path, f, 0, &lastOffset, firstLength) {
+			firstLength := minInt64(BlockSize, work[i].size)
+			if !mustRead(bytesRead, i, fullPath, f, 0, &lastOffset, firstLength) {
 				cancellations.cancel(i)
 				f.Close()
 				continue
@@ -560,24 +560,24 @@ func readWorker(bytesRead chan ReadBlockResult, root_path string, work []NameAnd
 				continue
 			}
 
-			lastLength := minInt64(work[i].size-firstLength, BLOCK_SIZE)
-			if !mustRead(bytesRead, i, full_path, f, work[i].size-lastLength, &lastOffset, lastLength) {
+			lastLength := minInt64(work[i].size-firstLength, BlockSize)
+			if !mustRead(bytesRead, i, fullPath, f, work[i].size-lastLength, &lastOffset, lastLength) {
 				cancellations.cancel(i)
 				f.Close()
 				continue
 			}
 		} else {
 			// Read all the blocks except for the first and the last.
-			if work[i].size <= 2*BLOCK_SIZE {
+			if work[i].size <= 2*BlockSize {
 				// We already compared all of the blocks.
 				f.Close()
 				continue
 			}
 
 			// fmt.Printf("\nReading %d: %s of %d bytes", i, work[i].name, work[i].size)
-			for offset := BLOCK_SIZE; offset < work[i].size-BLOCK_SIZE; offset += BLOCK_SIZE {
-				readTo := minInt64(offset+BLOCK_SIZE, work[i].size-BLOCK_SIZE)
-				if !mustRead(bytesRead, i, full_path, f, offset, &lastOffset, readTo-offset) {
+			for offset := BlockSize; offset < work[i].size-BlockSize; offset += BlockSize {
+				readTo := minInt64(offset+BlockSize, work[i].size-BlockSize)
+				if !mustRead(bytesRead, i, fullPath, f, offset, &lastOffset, readTo-offset) {
 					cancellations.cancel(i)
 					break
 				}
@@ -615,7 +615,7 @@ func compareData(logger *Logger, stats *Stats, aRoot string, bRoot string, needD
 	// It's possible to cancel this part too but we only advertise it for the last stage.
 	logger.log(headlinePad("Quick comparing files", 80))
 
-	aResults, bResults := make(chan ReadBlockResult, DATA_DIFF_PIPELINE_DEPTH), make(chan ReadBlockResult, DATA_DIFF_PIPELINE_DEPTH)
+	aResults, bResults := make(chan ReadBlockResult, DataDiffPipelineDepth), make(chan ReadBlockResult, DataDiffPipelineDepth)
 	go readWorker(aResults, aRoot, needDataCompare, &cancellations, false)
 	go readWorker(bResults, bRoot, needDataCompare, &cancellations, false)
 	stageCompareData(logger, stats, aRoot, bRoot, needDataCompare, &cancellations, aResults, bResults)
@@ -626,7 +626,7 @@ func compareData(logger *Logger, stats *Stats, aRoot string, bRoot string, needD
 
 	logger.log(headlinePad("Fully comparing files (Ctrl-C to cancel)", 80))
 
-	aResultsFull, bResultsFull := make(chan ReadBlockResult, DATA_DIFF_PIPELINE_DEPTH), make(chan ReadBlockResult, DATA_DIFF_PIPELINE_DEPTH)
+	aResultsFull, bResultsFull := make(chan ReadBlockResult, DataDiffPipelineDepth), make(chan ReadBlockResult, DataDiffPipelineDepth)
 	go readWorker(aResultsFull, aRoot, needDataCompare, &cancellations, true)
 	go readWorker(bResultsFull, bRoot, needDataCompare, &cancellations, true)
 	stageCompareData(logger, stats, aRoot, bRoot, needDataCompare, &cancellations, aResultsFull, bResultsFull)
@@ -634,7 +634,7 @@ func compareData(logger *Logger, stats *Stats, aRoot string, bRoot string, needD
 
 func stageCompareData(logger *Logger, stats *Stats, aRoot string, bRoot string, needDataCompare []NameAndSize, cancellations *CancellationIndex, aResults chan ReadBlockResult, bResults chan ReadBlockResult) {
 	var aResult, bResult ReadBlockResult
-	var aOk, bOk bool = true, true
+	var aOk, bOk = true, true
 	aResult.index = -1
 	bResult.index = -1
 
@@ -731,14 +731,14 @@ the search early, whereas if the tool is run to completion a full byte-for-byte 
 		flag.PrintDefaults()
 	}
 
-	var skipFull = flag.Bool("skip-full", false, fmt.Sprintf("only compare the first and last %d bytes of each file; stop immediately after the quick compare stage", BLOCK_SIZE))
+	var skipFull = flag.Bool("skip-full", false, fmt.Sprintf("only compare the first and last %d bytes of each file; stop immediately after the quick compare stage", BlockSize))
 	var printVersion = flag.Bool("version", false, "output version information and exit")
 	var quiet = flag.BoolP("quiet", "q", false, "suppress progress and final summary message; only print differences found")
 	var excludes = flag.StringArrayP("exclude", "", nil, "exclude files matching the given pattern")
 	flag.Parse()
 
 	if *printVersion {
-		fmt.Printf("spotdiff version %s\n", VERSION)
+		fmt.Printf("spotdiff version %s\n", Version)
 		os.Exit(0)
 	}
 
