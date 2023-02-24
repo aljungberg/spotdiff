@@ -152,7 +152,7 @@ func listInto(results chan normioutil.NormFileInfo, rootPath string, relPath str
 	files, err := normioutil.ReadDir(path.Join(rootPath, relPath))
 
 	if err != nil {
-		logger.log(fmt.Sprintf("Unable to read %v.", path.Join(rootPath, relPath)))
+		logger.log(fmt.Sprintf("Unable to read %v (%v).", path.Join(rootPath, relPath), err))
 		return
 	}
 
@@ -377,7 +377,7 @@ func comparePaths(aRoot string, bRoot string, skipFull bool, filter pathFilter) 
 					}
 				}
 			case lA.info.IsDir():
-				// Go depth first into folders.
+				// We do folders breadth-first, so we can just enqueue the subfolder at the end of the queue.
 				enqueueListFolder(path.Join(lA.results.folder, lA.info.FileName()))
 			case lA.info.Size() != lB.info.Size():
 				logger.writeOut(fmt.Sprintf("%v is %d bytes but counterpart is %d bytes (%d byte(s) difference).", path.Join(aRoot, lA.results.folder, lA.info.Name()), lA.info.Size(), lB.info.Size(), lB.info.Size()-lA.info.Size()))
